@@ -1,0 +1,34 @@
+server:
+  port: 8080
+  undertow:
+    io-threads: 12          # CPU 核心数 (i5-12490F: 6核12线程)
+    worker-threads: 64      # IO × 5~6
+    buffer-size: 16384      # 16KB
+
+spring:
+  application:
+    name: seckill-flash-system
+  profiles:
+    active: dev             # 默认开发环境, 生产用 -Dspring.profiles.active=prod
+
+# Redisson (Watchdog, 复用 spring.data.redis 连接)
+redisson:
+  lock-watchdog-timeout: 10000
+
+# MyBatis-Plus
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.nologging.NoLoggingImpl
+  global-config:
+    db-config:
+      id-type: none
+
+# 运行时参数
+seckill:
+  snowflake:
+    worker-id: 1
+  rate-limit:
+    ip-qps: 20
+    user-qps: 5
+    window-seconds: 1

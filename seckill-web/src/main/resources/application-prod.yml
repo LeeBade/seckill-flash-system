@@ -1,0 +1,38 @@
+# ──────────────────────────────────────────
+# 生产环境——双机网线直连
+# Node A (本机): Spring Boot + Redis + MQ Broker
+# Node B (192.168.1.101): MySQL + MQ NameServer
+# ──────────────────────────────────────────
+
+spring:
+  data:
+    redis:
+      host: 127.0.0.1
+      port: 6379
+      timeout: 200ms
+      lettuce:
+        pool:
+          max-active: 100
+          max-idle: 50
+          min-idle: 5
+          max-wait: 50ms
+
+  datasource:
+    url: jdbc:mysql://192.168.1.101:3306/seckill?useUnicode=true&characterEncoding=utf8mb4&serverTimezone=Asia/Shanghai&useSSL=false
+    username: root
+    password: root
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+      connection-timeout: 1000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+
+rocketmq:
+  name-server: 192.168.1.101:9876
+  producer:
+    group: seckill-producer-group
+    send-message-timeout: 500
+  consumer:
+    group: seckill-consumer-group

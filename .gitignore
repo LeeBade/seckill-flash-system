@@ -1,0 +1,48 @@
+# Maven
+target/
+!.mvn/wrapper/maven-wrapper.jar
+*.jar
+*.war
+
+# IDE
+.idea/
+*.iml
+*.iws
+*.ipr
+.vscode/
+.settings/
+.project
+.classpath
+
+# Java
+*.class
+*.log
+*.tmp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Log
+logs/
+*.log
+
+# Local environment configs
+etc/
+config/
+application-local.yml
+application-dev.yml
+.env
+
+# Test & Coverage
+/dump.rdb
+/heapdump.hprof
+**/test-output/
+**/target/site/jacoco/
+jmeter.log
+*.jtl
+
+# Middleware / Container data
+data/
+*.db
+

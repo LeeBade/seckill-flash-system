@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+
+    <!--
+        异步日志配置——防止压测时 Console I/O 锁竞争拖垮业务线程
+        设计原则:
+          1. INFO/DEBUG 走异步队列, 不阻塞业务线程
+          2. WARN/ERROR 走同步 Appender, 保证异常日志不丢失
+          3. 队列 80% 满时丢弃 INFO/DEBUG, 保全业务吞吐
+    -->
+
+    <!-- ========== 基础属性 ========== -->
+    <property name="LOG_PATTERN"
+              value="%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"/>
+
+    <!-- ========== 同步 Appender: WARN + ERROR（绝不丢弃）========== -->
+    <appender name="CONSOLE_WARN" class="ch.qos.logback.core.ConsoleAppender">
+        <filter class="ch.qos.logback.classic.filter.ThresholdFilter">
+            <level>WARN</level>
+        </filter>
+        <encoder>
+            <pattern>${LOG_PATTERN}</pattern>
+        </encoder>
+    </appender>
+
+    <!-- ========== 异步 Appender: INFO + DEBUG（可丢弃）========== -->
+    <appender name="ASYNC_INFO" class="ch.qos.logback.classic.AsyncAppender">
+        <!--
+            队列大小: 1024 条消息
+            80% 阈值 (819) → 超过后丢弃 TRACE/DEBUG/INFO, WARN/ERROR 不丢
+            不阻塞调用线程 (neverBlock=true)
+        -->
+        <queueSize>1024</queueSize>
+        <discardingThreshold>819</discardingThreshold>
+        <neverBlock>true</neverBlock>
+
+        <!-- 包裹一个 Console Appender，只输出 INFO~TRACE -->
+        <appender class="ch.qos.logback.core.ConsoleAppender">
+            <filter class="ch.qos.logback.classic.filter.LevelFilter">
+                <level>INFO</level>
+                <onMatch>ACCEPT</onMatch>
+                <onMismatch>DENY</onMismatch>
+            </filter>
+            <encoder>
+                <pattern>${LOG_PATTERN}</pattern>
+            </encoder>
+        </appender>
+    </appender>
+
+    <!-- ========== 异步 Appender: DEBUG（压测时关闭）========== -->
+    <springProfile name="default">
+        <appender name="ASYNC_DEBUG" class="ch.qos.logback.classic.AsyncAppender">
+            <queueSize>512</queueSize>
+            <discardingThreshold>409</discardingThreshold>
+            <neverBlock>true</neverBlock>
+            <appender class="ch.qos.logback.core.ConsoleAppender">
+                <filter class="ch.qos.logback.classic.filter.LevelFilter">
+                    <level>DEBUG</level>
+                    <onMatch>ACCEPT</onMatch>
+                    <onMismatch>DENY</onMismatch>
+                </filter>
+                <encoder>
+                    <pattern>${LOG_PATTERN}</pattern>
+                </encoder>
+            </appender>
+        </appender>
+    </springProfile>
+
+    <!-- ========== Root Logger ========== -->
+    <root level="INFO">
+        <appender-ref ref="CONSOLE_WARN"/>
+        <appender-ref ref="ASYNC_INFO"/>
+    </root>
+
+    <!-- ========== 第三方框架日志压制 ========== -->
+    <!-- MyBatis SQL 日志 → 压测时关闭, 开发时可临时开 DEBUG -->
+    <logger name="com.seckill" level="INFO"/>
+    <logger name="org.apache.rocketmq" level="WARN"/>
+    <logger name="io.lettuce" level="WARN"/>
+    <logger name="org.redisson" level="WARN"/>
+    <logger name="com.zaxxer.hikari" level="WARN"/>
+    <logger name="org.springframework" level="WARN"/>
+    <logger name="io.undertow" level="WARN"/>
+
+</configuration>
