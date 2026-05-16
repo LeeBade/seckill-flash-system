@@ -6,6 +6,7 @@ import org.apache.rocketmq.spring.core.RocketMQListener;
 import org.apache.rocketmq.spring.core.RocketMQTemplate;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.messaging.support.MessageBuilder;
 import org.springframework.stereotype.Component;
 
@@ -35,9 +36,12 @@ public class OrderCreateConsumer implements RocketMQListener<OrderTimeoutMessage
     private static final Logger log = LoggerFactory.getLogger(OrderCreateConsumer.class);
 
     private final RocketMQTemplate rocketMQTemplate;
+    private final int delayLevel;
 
-    public OrderCreateConsumer(RocketMQTemplate rocketMQTemplate) {
+    public OrderCreateConsumer(RocketMQTemplate rocketMQTemplate,
+                               @Value("${seckill.order.timeout-delay-level:14}") int delayLevel) {
         this.rocketMQTemplate = rocketMQTemplate;
+        this.delayLevel = delayLevel;
     }
 
     /**
@@ -57,11 +61,11 @@ public class OrderCreateConsumer implements RocketMQListener<OrderTimeoutMessage
         rocketMQTemplate.syncSend(
                 MqConstants.TOPIC_ORDER_TIMEOUT,
                 MessageBuilder.withPayload(msg).build(),
-                500,  // timeout 500ms
-                MqConstants.DELAY_LEVEL_10_MIN  // 10 分钟后投递
+                500,
+                delayLevel
         );
 
         log.info("Delayed message sent: orderId={}, delayLevel={}",
-                msg.getOrderId(), MqConstants.DELAY_LEVEL_10_MIN);
+                msg.getOrderId(), delayLevel);
     }
 }

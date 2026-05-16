@@ -4,6 +4,8 @@ import com.seckill.common.SnowflakeIdGenerator;
 import com.seckill.engine.SeckillEngine;
 import com.seckill.engine.SeckillResult;
 import com.seckill.mq.MqConstants;
+import org.apache.rocketmq.client.producer.LocalTransactionState;
+import org.apache.rocketmq.client.producer.TransactionSendResult;
 import org.apache.rocketmq.spring.core.RocketMQTemplate;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -51,17 +53,21 @@ public class OrderService {
     }
 
     /**
-     * 创建订单——Saga 物理序列。
+     * 创建订单——Saga 物理序列（execute + MQ + rollback 绑定在同一 try-catch）。
+     * <p>
+     * <b>调用方（SeckillController）不得在此之前独立调用 engine.execute()，
+     * 否则会破坏 Saga 原子性并导致双重扣减。</b>
+     * </p>
      *
      * @param goodsId     商品 ID
      * @param userId      用户 ID
      * @param activityId  活动 ID
      * @param seckillPrice 秒杀成交价（单位:分）
-     * @return Snowflake 预生成的订单 ID，若 Lua 扣减失败返回 null
+     * @return 创建结果——成功携带 orderId，失败携带拒绝原因
      * @throws RuntimeException 若 Lua 扣减成功但 MQ 半消息发送失败（已执行 Saga 回滚）
      * @since 2026-05-12
      */
-    public Long createOrder(long goodsId, long userId, long activityId, int seckillPrice) {
+    public CreateOrderResult createOrder(long goodsId, long userId, long activityId, int seckillPrice) {
 
         // ════════════════════════════════════════════════════
         // Step 1: 内存极速判决——Lua 原子扣减
@@ -70,48 +76,98 @@ public class OrderService {
         SeckillResult result = seckillEngine.execute(goodsId, userId);
         if (result != SeckillResult.SUCCESS) {
             log.info("Seckill rejected: goodsId={}, userId={}, result={}", goodsId, userId, result);
-            return null;
+            return CreateOrderResult.rejected(result);
         }
 
         // ════════════════════════════════════════════════════
-        // Step 2: 危机区间——Lua 已成功，Redis 库存已扣
-        // 此时若 JVM 宕机 → Phase 3 checkLocalTransaction 兜底
-        // 此时若 MQ 发送失败 → catch block Saga 回滚
+        // Step 2: 危机区间——Lua 已成功，Redis 库存已扣。
+        // 此时若 JVM 宕机（1ms 黑暗时刻）→ 库存泄漏（少卖），
+        // 但 Redis-first 是 Saga 的故意取舍——宁可少卖也不可超卖。
         // ════════════════════════════════════════════════════
         Long orderId = idGenerator.nextId();
         OrderTimeoutMessage body = new OrderTimeoutMessage(orderId, goodsId);
         OrderCreationContext ctx = new OrderCreationContext(
                 orderId, userId, goodsId, activityId, seckillPrice);
 
+        // Step 3: 发送事务半消息 → Broker 回调 executeLocalTransaction 执行纯 DB INSERT
+        TransactionSendResult sendResult;
         try {
-            // Step 3: 发送半消息——成功后回调 executeLocalTransaction 执行纯 DB INSERT
-            rocketMQTemplate.sendMessageInTransaction(
-                    MqConstants.PRODUCER_GROUP_ORDER,
-                    MessageBuilder.withPayload(body)
-                            .setHeader("TOPIC", MqConstants.TOPIC_ORDER_CREATE)
-                            .build(),
+            sendResult = rocketMQTemplate.sendMessageInTransaction(
+                    MqConstants.TOPIC_ORDER_CREATE,
+                    MessageBuilder.withPayload(body).build(),
                     ctx
             );
-            log.info("Order created: orderId={}, goodsId={}, userId={}", orderId, goodsId, userId);
-            return orderId;
-
         } catch (Exception e) {
             // ════════════════════════════════════════════════════
-            // Step 4: 物理补偿兜底——半消息发送失败！
-            // 必须回滚 Redis 状态——恢复库存 + 删除购买记录
-            // 否则: 库存永久泄漏 + 用户永久锁死
+            // Step 4a: 半消息发送失败（Broker 不可达 / 网络中断）
+            // 半消息未持久化 → Broker 不会回调 executeLocalTransaction
+            // → DB 无订单 → 必须回滚 Redis
             // ════════════════════════════════════════════════════
             log.error("Half message send failed! Rolling back Redis: orderId={}, goodsId={}, userId={}",
                     orderId, goodsId, userId, e);
-
-            Long rollbackResult = seckillEngine.rollback(goodsId, userId);
-            log.warn("Saga rollback completed: result={}, goodsId={}, userId={}",
-                    rollbackResult, goodsId, userId);
-
+            seckillEngine.rollback(goodsId, userId);
             throw new RuntimeException(
                     "Seckill succeeded but order creation failed, stock has been restored. " +
                             "Please retry. goodsId=" + goodsId, e);
         }
+
+        // Step 4b: 半消息发送成功——检查本地事务执行结果
+        // sendMessageInTransaction 对 ROLLBACK 不抛异常，只反映在返回值中
+        LocalTransactionState state = sendResult.getLocalTransactionState();
+
+        if (state == LocalTransactionState.COMMIT_MESSAGE) {
+            log.info("Order created: orderId={}, goodsId={}, userId={}", orderId, goodsId, userId);
+            return CreateOrderResult.ok(orderId);
+        }
+
+        if (state == LocalTransactionState.ROLLBACK_MESSAGE) {
+            // executeLocalTransaction 返回 ROLLBACK —— DB INSERT 确定失败
+            // 必须回滚 Redis，否则库存永久泄漏 + 用户被限购锁死
+            log.error("Local transaction ROLLBACK, rolling back Redis: orderId={}, goodsId={}, userId={}",
+                    orderId, goodsId, userId);
+            seckillEngine.rollback(goodsId, userId);
+            return CreateOrderResult.rejected(SeckillResult.SOLD_OUT);
+        }
+
+        // UNKNOW: 不确定 DB INSERT 是否成功 —— 不碰 Redis（避免超卖）
+        // Broker 会回调 checkLocalTransaction 回查 DB 状态补判
+        log.error("Transaction state UNKNOW: orderId={}, goodsId={}, userId={}. " +
+                "Not rolling back Redis to avoid potential oversell. " +
+                "checkLocalTransaction will probe DB and determine final state.",
+                orderId, goodsId, userId);
+        throw new RuntimeException(
+                "Order transaction state UNKNOW, please retry or check order status later. orderId=" + orderId);
+    }
+
+    /**
+     * 订单创建结果——携带 orderId 或引擎拒绝原因。
+     * <p>
+     * 成功时可通过 {@link #isSuccess()} 判定并取 {@link #getOrderId()}；
+     * 失败时通过 {@link #getRejection()} 取 {@link SeckillResult} 映射到对应的 {@link com.seckill.common.ResultCode}。
+     * </p>
+     */
+    public static class CreateOrderResult {
+        private final boolean success;
+        private final Long orderId;
+        private final SeckillResult rejection;
+
+        private CreateOrderResult(boolean success, Long orderId, SeckillResult rejection) {
+            this.success = success;
+            this.orderId = orderId;
+            this.rejection = rejection;
+        }
+
+        public static CreateOrderResult ok(Long orderId) {
+            return new CreateOrderResult(true, orderId, null);
+        }
+
+        public static CreateOrderResult rejected(SeckillResult reason) {
+            return new CreateOrderResult(false, null, reason);
+        }
+
+        public boolean isSuccess() { return success; }
+        public Long getOrderId() { return orderId; }
+        public SeckillResult getRejection() { return rejection; }
     }
 
     /**

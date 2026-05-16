@@ -10,6 +10,8 @@ spring:
     name: seckill-flash-system
   profiles:
     active: dev             # 默认开发环境, 生产用 -Dspring.profiles.active=prod
+  main:
+    allow-bean-definition-overriding: true
 
 # Redisson (Watchdog, 复用 spring.data.redis 连接)
 redisson:
@@ -28,7 +30,7 @@ mybatis-plus:
 seckill:
   snowflake:
     worker-id: 1
-  rate-limit:
-    ip-qps: 20
-    user-qps: 5
-    window-seconds: 1
+  gateway:
+    hmac-secret: ${SECRET_KEY:change-me-in-production}
+  order:
+    timeout-delay-level: 14     # RocketMQ 延时等级 14=10min, 15=20min, 16=30min

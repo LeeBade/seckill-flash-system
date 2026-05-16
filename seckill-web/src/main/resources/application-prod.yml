@@ -18,7 +18,7 @@ spring:
           max-wait: 50ms
 
   datasource:
-    url: jdbc:mysql://192.168.1.101:3306/seckill?useUnicode=true&characterEncoding=utf8mb4&serverTimezone=Asia/Shanghai&useSSL=false
+    url: jdbc:mysql://192.168.1.101:3306/seckill?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai&useSSL=false
     username: root
     password: root
     driver-class-name: com.mysql.cj.jdbc.Driver

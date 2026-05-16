@@ -55,7 +55,14 @@ public class StockWarmupService {
             int totalStock = rs.getInt("total_stock");
             String key = RedisKeyBuilder.stockKey(goodsId);
             redisTemplate.opsForValue().set(key, String.valueOf(totalStock));
-            log.info("Warmup goodsId={}, stock={}", goodsId, totalStock);
+            // 回读验证——确认写入值与预期一致，排除序列化/连接异常
+            String readBack = redisTemplate.opsForValue().get(key);
+            if (!String.valueOf(totalStock).equals(readBack)) {
+                log.error("Warmup VERIFICATION FAILED: goodsId={}, wrote={}, readBack={}",
+                        goodsId, totalStock, readBack);
+            } else {
+                log.info("Warmup OK: goodsId={}, stock={}, key={}", goodsId, totalStock, key);
+            }
         });
 
         log.info("Stock warmup completed");

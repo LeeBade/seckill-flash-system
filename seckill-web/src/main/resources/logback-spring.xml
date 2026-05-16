@@ -23,28 +23,36 @@
         </encoder>
     </appender>
 
-    <!-- ========== 异步 Appender: INFO + DEBUG（可丢弃）========== -->
+    <!-- ========== 子 Appender: INFO 同步输出（给 AsyncAppender 包裹）========== -->
+    <appender name="CONSOLE_INFO_SYNC" class="ch.qos.logback.core.ConsoleAppender">
+        <filter class="ch.qos.logback.classic.filter.LevelFilter">
+            <level>INFO</level>
+            <onMatch>ACCEPT</onMatch>
+            <onMismatch>DENY</onMismatch>
+        </filter>
+        <encoder>
+            <pattern>${LOG_PATTERN}</pattern>
+        </encoder>
+    </appender>
+
+    <!-- ========== 子 Appender: DEBUG 同步输出（给 AsyncAppender 包裹）========== -->
+    <appender name="CONSOLE_DEBUG_SYNC" class="ch.qos.logback.core.ConsoleAppender">
+        <filter class="ch.qos.logback.classic.filter.LevelFilter">
+            <level>DEBUG</level>
+            <onMatch>ACCEPT</onMatch>
+            <onMismatch>DENY</onMismatch>
+        </filter>
+        <encoder>
+            <pattern>${LOG_PATTERN}</pattern>
+        </encoder>
+    </appender>
+
+    <!-- ========== 异步 Appender: INFO（可丢弃，引用 CONSOLE_INFO_SYNC）========== -->
     <appender name="ASYNC_INFO" class="ch.qos.logback.classic.AsyncAppender">
-        <!--
-            队列大小: 1024 条消息
-            80% 阈值 (819) → 超过后丢弃 TRACE/DEBUG/INFO, WARN/ERROR 不丢
-            不阻塞调用线程 (neverBlock=true)
-        -->
         <queueSize>1024</queueSize>
         <discardingThreshold>819</discardingThreshold>
         <neverBlock>true</neverBlock>
-
-        <!-- 包裹一个 Console Appender，只输出 INFO~TRACE -->
-        <appender class="ch.qos.logback.core.ConsoleAppender">
-            <filter class="ch.qos.logback.classic.filter.LevelFilter">
-                <level>INFO</level>
-                <onMatch>ACCEPT</onMatch>
-                <onMismatch>DENY</onMismatch>
-            </filter>
-            <encoder>
-                <pattern>${LOG_PATTERN}</pattern>
-            </encoder>
-        </appender>
+        <appender-ref ref="CONSOLE_INFO_SYNC"/>
     </appender>
 
     <!-- ========== 异步 Appender: DEBUG（压测时关闭）========== -->
@@ -53,29 +61,50 @@
             <queueSize>512</queueSize>
             <discardingThreshold>409</discardingThreshold>
             <neverBlock>true</neverBlock>
-            <appender class="ch.qos.logback.core.ConsoleAppender">
-                <filter class="ch.qos.logback.classic.filter.LevelFilter">
-                    <level>DEBUG</level>
-                    <onMatch>ACCEPT</onMatch>
-                    <onMismatch>DENY</onMismatch>
-                </filter>
-                <encoder>
-                    <pattern>${LOG_PATTERN}</pattern>
-                </encoder>
-            </appender>
+            <appender-ref ref="CONSOLE_DEBUG_SYNC"/>
         </appender>
     </springProfile>
 
-    <!-- ========== Root Logger ========== -->
-    <root level="INFO">
-        <appender-ref ref="CONSOLE_WARN"/>
-        <appender-ref ref="ASYNC_INFO"/>
-    </root>
+    <!-- ========== 生产环境：落盘文件（异步）========== -->
+    <springProfile name="prod">
+        <appender name="FILE_SYNC" class="ch.qos.logback.core.rolling.RollingFileAppender">
+            <file>logs/seckill.log</file>
+            <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+                <fileNamePattern>logs/seckill.%d{yyyy-MM-dd}.%i.log</fileNamePattern>
+                <maxFileSize>100MB</maxFileSize>
+                <maxHistory>7</maxHistory>
+                <totalSizeCap>1GB</totalSizeCap>
+            </rollingPolicy>
+            <encoder>
+                <pattern>${LOG_PATTERN}</pattern>
+            </encoder>
+        </appender>
+
+        <appender name="ASYNC_FILE" class="ch.qos.logback.classic.AsyncAppender">
+            <queueSize>1024</queueSize>
+            <discardingThreshold>819</discardingThreshold>
+            <neverBlock>true</neverBlock>
+            <appender-ref ref="FILE_SYNC"/>
+        </appender>
+
+        <root level="INFO">
+            <!-- 生产只留 WARN+ 到控制台（运维告警），INFO+ 走文件 -->
+            <appender-ref ref="CONSOLE_WARN"/>
+            <appender-ref ref="ASYNC_FILE"/>
+        </root>
+    </springProfile>
+
+    <!-- ========== 非生产环境 Root Logger（dev / test / default）========== -->
+    <springProfile name="!prod">
+        <root level="INFO">
+            <appender-ref ref="CONSOLE_WARN"/>
+            <appender-ref ref="ASYNC_INFO"/>
+        </root>
+    </springProfile>
 
     <!-- ========== 第三方框架日志压制 ========== -->
-    <!-- MyBatis SQL 日志 → 压测时关闭, 开发时可临时开 DEBUG -->
     <logger name="com.seckill" level="INFO"/>
-    <logger name="org.apache.rocketmq" level="WARN"/>
+    <logger name="org.apache.rocketmq" level="INFO"/>
     <logger name="io.lettuce" level="WARN"/>
     <logger name="org.redisson" level="WARN"/>
     <logger name="com.zaxxer.hikari" level="WARN"/>
